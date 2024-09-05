@@ -32,13 +32,14 @@ The Persister plugin declares a `Persister` singleton for managing save files an
 
 #### Persister methods
 
-**Save file methods**
+Save-file-related methods:
 - load_save(path: FilePath) -> void - Finds the `.sav` or `.tsav` file stored at `path` and loads its values into the `sav` variable
 - store_save(path: FilePath, saveFile: SaveFile = sav) -> void - Stores a `SaveFile` resource at the specified file path. By default, stores the value of the `sav` variable
 - list_saves() -> FilePath[] - Returns a list of all `.sav` or `.tsav` files stored in `user://` and `res://`
 - view_save(path: FilePath) -> SaveFile - Returns a `SaveFile` resource loaded from `path`. Does not change the value of `sav`.
 - delete_save(path: FilePath) -> void - Deletes the `.sav` or `.tsav` file stored at `path`
-**Settings file methods**
+
+Settings-file-related methods:
 - load_settings() -> void - Finds the `user://settings.tres` file and loads its contents into `settings`
 - store_settings() -> void - Stores the values from `settings` into `user://settings.tres`
 - delete_settings() -> void - Deletes `settings.tres`. Does not modify the `settings` variable or any related runtime values
