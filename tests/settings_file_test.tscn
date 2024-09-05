@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3 uid="uid://bewdtfbotlghk"]
+
+[ext_resource type="Script" path="res://addons/persister/tests/settings_file_test.gd" id="1_7fftd"]
+
+[node name="SettingsFileTest" type="Node"]
+script = ExtResource("1_7fftd")
