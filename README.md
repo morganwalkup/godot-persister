@@ -185,3 +185,11 @@ Finally, you may edit, store, and load data in your settings file as needed:
     Persister.settings.some_value = 1.0
     Persister.store_settings()
 ```
+
+# Tests
+
+The plugin includes a set of automated tests defined in the `tests/` folder.
+
+To run the tests, open any of the `*_test.tscn` files within the Godot editor and choose `Run Current Scene`.
+
+Test results will appear in the `Output` window.
