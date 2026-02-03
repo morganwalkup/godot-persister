@@ -65,6 +65,6 @@ func _load(path: String, original_path: String, use_sub_threads: bool, cache_mod
 
     # Fix metadata on the Resource, like resource_path
     resource.resource_path = path
-
+    print("sav_format_loader > _load > Resource version: ", resource.version)
     return resource as SaveFile
     
