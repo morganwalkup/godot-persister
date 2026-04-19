@@ -1,6 +1,6 @@
-[gd_scene load_steps=2 format=3 uid="uid://drx36dv0w8w4h"]
+[gd_scene format=3 uid="uid://drx36dv0w8w4h"]
 
-[ext_resource type="Script" path="res://addons/persister/tests/persister_test.gd" id="1_mpupa"]
+[ext_resource type="Script" uid="uid://derupfgminbc" path="res://addons/persister/tests/persister_test.gd" id="1_mpupa"]
 
-[node name="PersisterTest" type="Node"]
+[node name="PersisterTest" type="Node" unique_id=1225358462]
 script = ExtResource("1_mpupa")

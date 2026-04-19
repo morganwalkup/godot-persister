@@ -1,6 +1,6 @@
-[gd_scene load_steps=2 format=3 uid="uid://cicecpcrprksm"]
+[gd_scene format=3 uid="uid://cicecpcrprksm"]
 
-[ext_resource type="Script" path="res://addons/persister/tests/save_file_test.gd" id="1_x403e"]
+[ext_resource type="Script" uid="uid://ck24xv15km0u2" path="res://addons/persister/tests/save_file_test.gd" id="1_x403e"]
 
-[node name="SaveFileTest" type="Node"]
+[node name="SaveFileTest" type="Node" unique_id=1418797]
 script = ExtResource("1_x403e")
