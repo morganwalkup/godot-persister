@@ -1,50 +1,44 @@
 class_name SaveMigrations
 extends RefCounted
 
-# Versioned migration chain for save file dictionaries.
+# Base class for save-file migration chains.
 #
-# Disk format always carries a top-level "version" int. On load, this script
-# walks the dict forward through every applicable migrator until it reaches
-# CURRENT_VERSION, at which point Persister hands it to DictSerializer.from_dict
-# for rehydration.
+# This base is a no-op: current_version() returns 0 and _step() just stamps the
+# dict to current. Project code should subclass this, override current_version()
+# and _step(), and tell Persister to use the subclass:
 #
-# Rules:
-#   - Migrations only ever move forward. Never write a v(N) -> v(N-1) migrator.
-#   - Each migrator is a pure Dictionary -> Dictionary transform. Don't touch
-#     the engine, scene tree, or autoloads from in here.
-#   - Treat dict keys as a wire format. Once a key name ships, it lives forever
-#     in this file even if the corresponding GDScript field is renamed.
+#     # In main.gd, before any Persister.load_save / store_save calls:
+#     Persister.migrations = KinspritSaveMigrations.new()
+#
+# Subclasses must follow two rules:
+#   - Migrations only ever move forward. Never write a v(N) -> v(N-1) step.
+#   - Treat dict keys as a wire format. Once a key ships, it lives in this file
+#     forever, even if the corresponding GDScript field is later renamed.
 
-const CURRENT_VERSION: int = 1
+
+# Override in subclasses to return the latest known schema version.
+func current_version() -> int:
+	return 0
 
 
-static func migrate(d: Dictionary) -> Dictionary:
+# Walk the dict forward through _step() until it reaches current_version().
+# Subclasses generally shouldn't need to override this — override _step instead.
+func migrate(d: Dictionary) -> Dictionary:
 	var version: int = int(d.get("version", 0))
-	if version > CURRENT_VERSION:
-		push_warning("SaveMigrations.migrate: save was written by a newer version (%d > %d). Loading as-is." % [version, CURRENT_VERSION])
+	var target: int = current_version()
+	if version > target:
+		push_warning("SaveMigrations.migrate: save was written by a newer version (%d > %d). Loading as-is." % [version, target])
 		return d
-	while version < CURRENT_VERSION:
+	while version < target:
 		d = _step(d, version)
 		version = int(d.get("version", version + 1))
 	return d
 
 
-# Dispatch a single forward step. Each case bumps "version" to the target.
-static func _step(d: Dictionary, from_version: int) -> Dictionary:
-	match from_version:
-		# Example for the future:
-		# 1:
-		#     d = _migrate_v1_to_v2(d)
-		_:
-			push_warning("SaveMigrations: no migrator from version %d; stamping to current and continuing" % from_version)
-			d["version"] = CURRENT_VERSION
+# Apply a single forward migration step. Override in subclasses and dispatch
+# off `from_version` to the appropriate migrator. The default implementation
+# warns and stamps the dict to current_version() so loads don't get stuck.
+func _step(d: Dictionary, from_version: int) -> Dictionary:
+	push_warning("SaveMigrations: no migrator registered from version %d; stamping to %d and continuing" % [from_version, current_version()])
+	d["version"] = current_version()
 	return d
-
-
-# Migrators go below as the schema evolves. Keep each one small and focused.
-#
-# static func _migrate_v1_to_v2(d: Dictionary) -> Dictionary:
-#     d["player_position"] = d.get("player_world_position", Vector2.ZERO)
-#     d.erase("player_world_position")
-#     d["version"] = 2
-#     return d

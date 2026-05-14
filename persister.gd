@@ -15,6 +15,16 @@ const UNCOMPRESSED_EXT = "tsav"
 var save: SaveFile = SaveFile.new()
 var settings: SettingsFile = SettingsFile.new()
 
+# Project code should replace this with a subclass before any load_save /
+# store_save call, e.g. in main.gd:
+#     Persister.migrations = KinspritSaveMigrations.new()
+# The default no-op base will load any save as-is and stamp version=0, which
+# is fine for prototyping but not for shipped saves.
+#
+# If wiring this up in main.gd ever feels onerous, an alternative is to read a
+# class name from ProjectSettings here and instantiate via get_global_class_list.
+var migrations: SaveMigrations = SaveMigrations.new()
+
 signal before_load_save()
 signal after_load_save()
 signal before_store_save()
@@ -33,7 +43,7 @@ func load_save(path: String) -> void:
 		push_error("Persister.load_save: save at %s did not parse to a Dictionary" % path)
 		after_load_save.emit()
 		return
-	var migrated: Dictionary = SaveMigrations.migrate(parsed)
+	var migrated: Dictionary = migrations.migrate(parsed)
 	var loaded: Resource = DictSerializer.from_dict(migrated)
 	if loaded is SaveFile:
 		save = loaded
@@ -44,9 +54,9 @@ func load_save(path: String) -> void:
 
 func store_save(path: String, save_file: SaveFile = save) -> void:
 	before_store_save.emit()
-	save_file.version = SaveMigrations.CURRENT_VERSION
+	save_file.version = migrations.current_version()
 	var dict: Dictionary = DictSerializer.to_dict(save_file)
-	dict["version"] = SaveMigrations.CURRENT_VERSION
+	dict["version"] = migrations.current_version()
 	var text: String = var_to_str(dict)
 	_write_text(path, text)
 	after_store_save.emit()
@@ -67,7 +77,7 @@ func view_save(path: String) -> SaveFile:
 	var parsed: Variant = str_to_var(text)
 	if not (parsed is Dictionary):
 		return null
-	var migrated: Dictionary = SaveMigrations.migrate(parsed)
+	var migrated: Dictionary = migrations.migrate(parsed)
 	var resource: Resource = DictSerializer.from_dict(migrated)
 	return resource as SaveFile
 
