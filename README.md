@@ -3,9 +3,10 @@
 A Godot plugin for managing save files and settings files.
 
 ```py
-# Extend SaveFile and SettingsFile base classes to fit your game
+# Extend SaveFile, SettingsFile, and SaveMigrations base classes to fit your game
 Persister.save = MyGameSaveFile.new()
 Persister.settings = MyGameSettingsFile.new()
+Persister.migrations = MyGameSaveMigrations.new()
 
 # Load existing SaveFile data and SettingsFile data from disk
 Persister.load_save("user://slot_0.sav")
@@ -29,14 +30,15 @@ The Persister plugin declares a `Persister` singleton for managing save files an
 
 - save - SaveFile - A reference to the active `SaveFile` resource.
 - settings - SettingsFile - A reference to the active `SettingsFile` resource.
+- migrations - SaveMigrations - The migration chain Persister consults when loading saves and stamping versions. Defaults to a no-op base instance. Project code should replace this with a `SaveMigrations` subclass before any load_save / store_save call.
 
 #### Persister methods
 
 Save-file-related methods:
-- load_save(path: FilePath) -> void - Finds the `.sav` or `.tsav` file stored at `path` and loads its values into the `save` variable
-- store_save(path: FilePath, saveFile: SaveFile = Persister.save) -> void - Stores a `SaveFile` resource at the specified file path. By default, stores the value of the `save` variable
-- list_saves() -> FilePath[] - Returns a list of all `.sav` or `.tsav` files stored in `user://` and `res://`
-- view_save(path: FilePath) -> SaveFile - Returns a `SaveFile` resource loaded from `path`. Does not change the value of `save`.
+- load_save(path: FilePath) -> void - Finds the `.sav` or `.tsav` file stored at `path`, runs it through `Persister.migrations.migrate(...)`, and loads its values into the `save` variable
+- store_save(path: FilePath, saveFile: SaveFile = Persister.save) -> void - Stamps `saveFile.version` with `Persister.migrations.current_version()` and stores the resource at the specified file path. By default, stores the value of the `save` variable
+- list_saves() -> FilePath[] - Returns a list of all `.sav` or `.tsav` files stored in `user://`
+- view_save(path: FilePath) -> SaveFile - Returns a `SaveFile` resource loaded from `path` (with migrations applied). Does not change the value of `save`.
 - delete_save(path: FilePath) -> void - Deletes the `.sav` or `.tsav` file stored at `path`
 
 Settings-file-related methods:
@@ -47,9 +49,9 @@ Settings-file-related methods:
 #### Persister signals
 
 - before_load_save - Emitted just before a new `SaveFile` is loaded from the file system
-- after_load_save - Emitted just after a new `SaveFile` is loaded from the file system, and just after the value of `Persister.sav` is updated
-- before_store_save - Emitted just before `Persister.sav` is written to the file system
-- after_store_save - Emitted just after `Persister.sav` is written to the file system
+- after_load_save - Emitted just after a new `SaveFile` is loaded from the file system, and just after the value of `Persister.save` is updated
+- before_store_save - Emitted just before `Persister.save` is written to the file system
+- after_store_save - Emitted just after `Persister.save` is written to the file system
 
 ### Save Files
 
@@ -63,7 +65,29 @@ Persister uses a custom `SaveFile` class for storing save data.
 
 Save data can be stored in human-readable `.tsav` files or compressed `.sav` files depending on the needs of your game.
 
-Persister's approach to save files is heavily influenced by Godotneer's video here: https://www.youtube.com/watch?v=43BZsLZheA4&ab_channel=Godotneers
+#### On-disk format
+
+Save files are written as a versioned `Dictionary` serialized via `var_to_str`. This means:
+
+- **Every property is written**, including ones still at their script-declared default. Compare this with `ResourceSaver`, which silently omits fields that match defaults — that omission makes deterministic migrations between schema versions effectively impossible.
+- **Built-in types like `Vector2`, `Color`, `Rect2`, `NodePath`, `StringName`, etc. round-trip losslessly** thanks to `var_to_str`/`str_to_var`. No hand-written converters per type.
+- **Script paths are not embedded.** Resources are looked up by their `class_name` at load time via `ProjectSettings.get_global_class_list`. You can move or rename a script in `res://` without bricking shipped saves.
+- **The top-level dict carries a `version` int** that drives the migration chain (see below).
+
+A `.tsav` file looks roughly like this:
+
+```py
+{
+"_class": "ExampleSaveFile",
+"version": 1,
+"player_health": 50.0,
+"player_position": Vector2(83.5, 348.9),
+"inventory": {},
+"opened_door": false
+}
+```
+
+`.sav` files contain the same payload, ZSTD-compressed.
 
 ### Save File Examples
 
@@ -80,6 +104,8 @@ Declare export vars to store any data that should persist between gameplay sessi
     @export var opened_door: bool = false
 ```
 
+Don't redeclare or initialize the inherited `version: int` field — Persister manages it for you on store, and `SaveMigrations` manages it on load.
+
 Next, initialize `Persister` with your extended save file when the game starts:
 
 ```py
@@ -94,6 +120,79 @@ Finally, you may edit, store, and load data in your save file as needed:
 ```
 
 The finer details, like when to save and how many save files to maintain, are outside the scope of `Persister`.
+
+### Save File Migrations
+
+When you ship a game, save files written by old versions need to keep loading after you change the schema. Persister handles this through a `SaveMigrations` class that converts older dicts forward through a chain of small, focused transforms until the dict matches the current schema.
+
+#### Why migrations are first-class here
+
+The dict format above makes the rest of this easy:
+
+- Adding a field is automatic — `from_dict` falls back to the script default if the key is missing.
+- Renaming a field is a one-line migrator: `d["new_name"] = d.get("old_name", default); d.erase("old_name")`.
+- Changing a field's type is a small migrator that converts the value.
+- Removing a field is a one-line migrator that calls `d.erase(...)`.
+
+Each migrator is a pure `Dictionary -> Dictionary` transform with no engine or scene tree dependencies, which makes them trivial to test.
+
+#### Defining migrations
+
+Extend `SaveMigrations` once per project:
+
+```py
+    class_name ExampleSaveMigrations
+    extends SaveMigrations
+
+    const CURRENT_VERSION: int = 2
+
+    func current_version() -> int:
+        return CURRENT_VERSION
+
+    func _step(d: Dictionary, from_version: int) -> Dictionary:
+        match from_version:
+            0:
+                return _migrate_v0_to_v1(d)
+            1:
+                return _migrate_v1_to_v2(d)
+            _:
+                return super._step(d, from_version)
+
+    # v0 is anything written before this migration chain existed. Nothing to
+    # transform — just stamp it forward.
+    func _migrate_v0_to_v1(d: Dictionary) -> Dictionary:
+        d["version"] = 1
+        return d
+
+    # Renamed player_world_position -> player_position.
+    func _migrate_v1_to_v2(d: Dictionary) -> Dictionary:
+        d["player_position"] = d.get("player_world_position", Vector2.ZERO)
+        d.erase("player_world_position")
+        d["version"] = 2
+        return d
+```
+
+Then tell Persister to use it, **before any load_save or store_save call**:
+
+```py
+    func _ready() -> void:
+        Persister.migrations = ExampleSaveMigrations.new()
+        # ... load saves, etc. ...
+```
+
+The default `SaveMigrations` base class is a working no-op (`current_version() == 0`, `_step` warns and stamps to current), so saves still round-trip if you forget to wire up a subclass — you just don't get any real migration logic. For prototyping that's fine; for a shipped game you want a real subclass.
+
+#### Migration rules of thumb
+
+- **Migrations only ever move forward.** Never write a v(N) → v(N-1) step. If a user downgrades, they restore from a backup.
+- **Bump `CURRENT_VERSION` and add a `_step` case in the same change.** Don't ship a schema change without the migrator that handles old saves.
+- **Treat dict keys as a wire format.** Once a key name ships, it lives in your migration code forever, even if the corresponding GDScript field is later renamed.
+- **Don't touch the engine, scene tree, or autoloads from inside a migrator.** They're pure data transforms.
+- **Commit golden save files at each shipped version** (e.g. `tests/saves/v1_minimal.tsav`, `v2_full.tsav`) so future migrators can be exercised against real-shaped data.
+
+### Save System Inspiration
+
+Persister's approach to save files is heavily influenced by Godotneer's video here: https://www.youtube.com/watch?v=43BZsLZheA4&ab_channel=Godotneers
 
 The following examples demonstrate how Persister might be used to recreate the save systems from several popular games.
 
@@ -149,7 +248,7 @@ Settings Files should be saved on the user's local machine, should never be clou
 
 Persister uses a custom `SettingsFile` class for storing settings data.
 
-Settings data is stored in human-readable `.tres` files. By default, Persister creates a single settings file at `user://settings.tres`.
+Settings data is stored in human-readable `.tres` files via Godot's standard `ResourceSaver` / `ResourceLoader`. By default, Persister creates a single settings file at `user://settings.tres`. Settings files do **not** go through the dict pipeline or the migration chain — they're simpler and rarely need schema evolution.
 
 #### Settings File Examples
 
