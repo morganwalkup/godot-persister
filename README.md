@@ -3,10 +3,12 @@
 A Godot plugin for managing save files and settings files.
 
 ```py
-# Extend SaveFile, SettingsFile, and SaveMigrations base classes to fit your game
+# Extend the SaveFile, SettingsFile, SaveMigrations, and SettingsMigrations
+# base classes to fit your game
 Persister.save = MyGameSaveFile.new()
 Persister.settings = MyGameSettingsFile.new()
 Persister.migrations = MyGameSaveMigrations.new()
+Persister.settings_migrations = MyGameSettingsMigrations.new()
 
 # Load existing SaveFile data and SettingsFile data from disk
 Persister.load_save("user://slot_0.sav")
@@ -31,6 +33,7 @@ The Persister plugin declares a `Persister` singleton for managing save files an
 - save - SaveFile - A reference to the active `SaveFile` resource.
 - settings - SettingsFile - A reference to the active `SettingsFile` resource.
 - migrations - SaveMigrations - The migration chain Persister consults when loading saves and stamping versions. Defaults to a no-op base instance. Project code should replace this with a `SaveMigrations` subclass before any load_save / store_save call.
+- settings_migrations - SettingsMigrations - The migration chain Persister consults when loading settings and stamping versions. Defaults to a no-op base instance. Project code should replace this with a `SettingsMigrations` subclass before any load_settings / store_settings call.
 
 #### Persister methods
 
@@ -42,9 +45,9 @@ Save-file-related methods:
 - delete_save(path: FilePath) -> void - Deletes the `.sav` or `.tsav` file stored at `path`
 
 Settings-file-related methods:
-- load_settings() -> void - Finds the `user://settings.tres` file and loads its contents into `settings`
-- store_settings() -> void - Stores the values from `settings` into `user://settings.tres`
-- delete_settings() -> void - Deletes `settings.tres`. Does not modify the `settings` variable or any related runtime values
+- load_settings(path: FilePath = "user://settings.tcfg") -> void - Reads the `.tcfg` file at `path`, runs it through `Persister.settings_migrations.migrate(...)`, and loads its values into the `settings` variable
+- store_settings(path: FilePath = "user://settings.tcfg", settingsFile: SettingsFile = Persister.settings) -> void - Stamps `settingsFile.version` with `Persister.settings_migrations.current_version()` and stores the resource at the specified file path. By default, stores the value of the `settings` variable
+- delete_settings(path: FilePath = "user://settings.tcfg") -> void - Deletes the `.tcfg` file at `path`. Does not modify the `settings` variable or any related runtime values
 
 #### Persister signals
 
@@ -52,6 +55,10 @@ Settings-file-related methods:
 - after_load_save - Emitted just after a new `SaveFile` is loaded from the file system, and just after the value of `Persister.save` is updated
 - before_store_save - Emitted just before `Persister.save` is written to the file system
 - after_store_save - Emitted just after `Persister.save` is written to the file system
+- before_load_settings - Emitted just before a new `SettingsFile` is loaded from the file system
+- after_load_settings - Emitted just after a new `SettingsFile` is loaded from the file system, and just after the value of `Persister.settings` is updated
+- before_store_settings - Emitted just before `Persister.settings` is written to the file system
+- after_store_settings - Emitted just after `Persister.settings` is written to the file system
 
 ### Save Files
 
@@ -200,7 +207,7 @@ The following examples demonstrate how Persister might be used to recreate the s
 - Number of save files: 1
 - Save strategy: Manual, outside combat
 - At startup, the player can select `Continue`, `New Game`, or `Options`
-- `Options` are stored in `user://settings.tres`
+- `Options` are stored in `user://settings.tcfg`
 - `New Game` loads nothing, playing the game from the default project state
 - `Continue` loads data from `user://pokemon_yellow.sav`
 - While playing, the player can save their progress manually by accessing the save menu
@@ -220,7 +227,7 @@ The following examples demonstrate how Persister might be used to recreate the s
 - Number of save files: 1 manual save + 5 autosaves, 1 master-mode manual save + 1 master-mode autosave
 - Save strategy: Autosaves regularly, manual save can be created at any time
 - At startup, the player can select `Continue`, `New Game`, `Master Mode`, or `Options`
-- `Options` are stored in `user://settings.tres`
+- `Options` are stored in `user://settings.tcfg`
 - `New Game` loads nothing, playing the game from the default project state
 - `Master Mode` allows the player to select `user://botw_master_auto.sav` or `user://botw_master.sav`
 - `Continue` allows the player to select a previous auto save or manual save such as `user://botw_auto_2.sav` or `user://botw.sav`
@@ -231,7 +238,7 @@ The following examples demonstrate how Persister might be used to recreate the s
 - Number of save files: 1 save per character, up to five characters
 - Save strategy: Autosaves constantly, no manual saves
 - At startup, the player can select `Continue`, `Load Game`, `New Game`, or `System`
-- `System` sets values stored in `user://settings.tres`
+- `System` sets values stored in `user://settings.tcfg`
 - `New Game` starts the game from the default project state, allowing the user to create and name a new character
 - `Load Game` allows the player to select a previous character save, such as `user://elden_ring_warrior.sav`
 - `Continue` loads the last active save (not sure how they know which one was active)
@@ -248,11 +255,27 @@ Settings Files should be saved on the user's local machine, should never be clou
 
 Persister uses a custom `SettingsFile` class for storing settings data.
 
-Settings data is stored in human-readable `.tres` files via Godot's standard `ResourceSaver` / `ResourceLoader`. By default, Persister creates a single settings file at `user://settings.tres`. Settings files do **not** go through the dict pipeline or the migration chain — they're simpler and rarely need schema evolution.
+Settings data is stored in human-readable `.tcfg` (text config) files. By default, Persister reads and writes a single settings file at `user://settings.tcfg`.
+
+#### On-disk format
+
+Settings files use the same versioned `Dictionary` pipeline as save files (see [Save Files → On-disk format](#on-disk-format) above). They're written via `var_to_str`, looked up by `class_name` on load, and run through a `SettingsMigrations` chain. The only structural differences from save files are:
+
+- Settings are always uncompressed text — the `.sav`/`.tsav` split doesn't apply, since settings are typically small and worth keeping hand-editable.
+- The migration chain is a separate `SettingsMigrations` instance on `Persister.settings_migrations`, independent of `Persister.migrations`.
+
+A `.tcfg` file looks roughly like this:
+
+```py
+{
+"_class": "ExampleSettingsFile",
+"version": 1,
+"window_size": Vector2i(1920, 1080),
+"master_volume_db": 0.0
+}
+```
 
 #### Settings File Examples
-
-Compared to save files, settings files are straight-forward.
 
 First, extend the `SettingsFile` class to create a custom settings file structure for your game.
 
@@ -272,6 +295,8 @@ Add setters and getters to any export vars that should react to changes during r
             some_value = value
 ```
 
+Don't redeclare or initialize the inherited `version: int` field — Persister manages it for you on store, and `SettingsMigrations` manages it on load.
+
 Next, initialize `Persister` with your extended settings file when the game starts:
 
 ```py
@@ -284,6 +309,46 @@ Finally, you may edit, store, and load data in your settings file as needed:
     Persister.settings.some_value = 1.0
     Persister.store_settings()
 ```
+
+### Settings File Migrations
+
+Settings files use the same migration approach as save files. The base class is `SettingsMigrations` instead of `SaveMigrations`, but the rules and shape are identical — see [Save File Migrations](#save-file-migrations) for the full discussion.
+
+Extend `SettingsMigrations` once per project:
+
+```py
+    class_name ExampleSettingsMigrations
+    extends SettingsMigrations
+
+    const CURRENT_VERSION: int = 1
+
+    func current_version() -> int:
+        return CURRENT_VERSION
+
+    func _step(d: Dictionary, from_version: int) -> Dictionary:
+        match from_version:
+            0:
+                return _migrate_v0_to_v1(d)
+            _:
+                return super._step(d, from_version)
+
+    # Renamed master_volume -> master_volume_db.
+    func _migrate_v0_to_v1(d: Dictionary) -> Dictionary:
+        d["master_volume_db"] = d.get("master_volume", 0.0)
+        d.erase("master_volume")
+        d["version"] = 1
+        return d
+```
+
+Then tell Persister to use it, **before any load_settings or store_settings call**:
+
+```py
+    func _ready() -> void:
+        Persister.settings_migrations = ExampleSettingsMigrations.new()
+        # ... load settings, etc. ...
+```
+
+As with `SaveMigrations`, the default `SettingsMigrations` base class is a working no-op. For prototyping that's fine; for a shipped game you want a real subclass so old `.tcfg` files keep loading after you change the schema.
 
 # Tests
 

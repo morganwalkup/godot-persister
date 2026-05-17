@@ -1,16 +1,16 @@
 extends Node
 
-# Save files are serialized as a versioned Dictionary written via var_to_str.
-# - `.tsav` -> plain text (use in development; hand-editable)
-# - `.sav`  -> ZSTD-compressed text (use in shipped builds)
-#
-# Settings still go through ResourceLoader/Saver for now; they're a separate
-# concern and don't need versioned migrations.
+# Save files and settings files are both serialized as a versioned Dictionary
+# written via var_to_str. Each goes through its own migration chain.
+# - `.tsav` -> plain text save (use in development; hand-editable)
+# - `.sav`  -> ZSTD-compressed text save (use in shipped builds)
+# - `.tcfg` -> plain text settings (always uncompressed; hand-editable)
 
-const SETTINGS_PATH = "user://settings.tres"
+const SETTINGS_PATH = "user://settings.tcfg"
 
 const COMPRESSED_EXT = "sav"
 const UNCOMPRESSED_EXT = "tsav"
+const SETTINGS_EXT = "tcfg"
 
 var save: SaveFile = SaveFile.new()
 var settings: SettingsFile = SettingsFile.new()
@@ -25,10 +25,19 @@ var settings: SettingsFile = SettingsFile.new()
 # class name from ProjectSettings here and instantiate via get_global_class_list.
 var migrations: SaveMigrations = SaveMigrations.new()
 
+# Same idea as `migrations`, but for settings files. Replace before any
+# load_settings / store_settings call:
+#     Persister.settings_migrations = MyGameSettingsMigrations.new()
+var settings_migrations: SettingsMigrations = SettingsMigrations.new()
+
 signal before_load_save()
 signal after_load_save()
 signal before_store_save()
 signal after_store_save()
+signal before_load_settings()
+signal after_load_settings()
+signal before_store_settings()
+signal after_store_settings()
 
 
 func load_save(path: String) -> void:
@@ -87,11 +96,34 @@ func delete_save(path: String) -> void:
 
 
 func load_settings(path: String = SETTINGS_PATH) -> void:
-	settings = ResourceLoader.load(path)
+	before_load_settings.emit()
+	var text: String = _read_text(path)
+	if text == "":
+		push_error("Persister.load_settings: could not read settings at %s" % path)
+		after_load_settings.emit()
+		return
+	var parsed: Variant = str_to_var(text)
+	if not (parsed is Dictionary):
+		push_error("Persister.load_settings: settings at %s did not parse to a Dictionary" % path)
+		after_load_settings.emit()
+		return
+	var migrated: Dictionary = settings_migrations.migrate(parsed)
+	var loaded: Resource = DictSerializer.from_dict(migrated)
+	if loaded is SettingsFile:
+		settings = loaded
+	else:
+		push_error("Persister.load_settings: deserialized settings are not a SettingsFile (got %s)" % type_string(typeof(loaded)))
+	after_load_settings.emit()
 
 
 func store_settings(path: String = SETTINGS_PATH, settings_file: SettingsFile = settings) -> void:
-	ResourceSaver.save(settings_file, path)
+	before_store_settings.emit()
+	settings_file.version = settings_migrations.current_version()
+	var dict: Dictionary = DictSerializer.to_dict(settings_file)
+	dict["version"] = settings_migrations.current_version()
+	var text: String = var_to_str(dict)
+	_write_text(path, text)
+	after_store_settings.emit()
 
 
 func delete_settings(path: String = SETTINGS_PATH) -> void:
